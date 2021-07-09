@@ -1,0 +1,376 @@
+---
+output:
+  word_document: default
+  html_document: default
+  pdf_document: default
+---
+title: "Time series analysis"
+author: "Appanna and Uranie"
+date: "10/06/2021"
+output: pdf_document
+---
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+
+# I. Non seasonal data (vanilla)
+The dataset contains information about the number of new flowers which are flowering at different locations within the vanilla cultivation, for the different dates. We will attempt to model the data so that we can make predictions about the expected total number of new flowers per day. The data describes the number of new flowers for only 1 flowering season. 
+
+```{r, echo=FALSE, results='hide'}
+##Library
+library(data.table)
+library(lubridate)
+library(tidyverse)
+library(visdat)
+library(forecast)
+```
+
+
+
+## 1. Characterisation of the data
+
+```{r, echo=FALSE}
+vanilla <- read.csv('Clean_table.csv')
+head(vanilla)
+```
+
+
+### Structure of the data
+
+```{r, echo=FALSE}
+glimpse(vanilla)
+```
+
+```{r, echo=FALSE}
+vis_miss(vanilla)
+```
+
+
+### Data cleaning
+
+The dates were transformed into "date" format which first were in "character" format. Only the 'date' and 'new_flowers' column need to be considered for the time series analysis. The missing values in the 'new_flowers' column were due to the fact that there were no flowers at that 'location' for that day. These missing values were replaced with 0. 
+
+```{r, echo=FALSE}
+#### Importing and cleaning ####
+#Create a new date object and append the new column as 'new_date'
+vanilla <- read.csv('Clean_table.csv')
+vanilla <- vanilla %>%
+  mutate(new_date = dmy(Date)) %>%
+  relocate(new_date) %>%
+  select_all(tolower)
+```
+
+```{r, echo=FALSE}
+class(vanilla) #dataframe
+#Replace nan and na values with 0 
+vanilla[is.na(vanilla)] <- 0
+
+kableExtra::kable(head(vanilla))
+#head(vanilla)
+```
+
+
+$$\\[1in]$$
+
+
+
+
+$$\\[1in]$$
+
+Data was aggregated to have one value per date.
+
+```{r, echo=FALSE}
+#defined new objct separately. Was originally just vanilla
+vanilla_gp_sum <- vanilla %>%
+  na.omit()%>%
+  group_by(new_date)%>%
+  summarize(new_flowers = sum(new_flowers))%>%
+  ungroup()
+
+#kableExtra::kable(head(vanilla_gp_sum))
+head(vanilla_gp_sum)
+
+```
+
+## 2. Linear regression
+
+```{r, echo=FALSE, results='hide'}
+plot(vanilla$new_date, vanilla$new_flowers,
+     xlab = "date", ylab = 'numbers of new flowers')
+```
+
+To be able to fit the linear regression the data was split into two features : day and month
+
+```{r, echo=FALSE}
+#Subsititue vanilla with vanilla_gp as newly defined in previous step
+
+vanilla_lm <- vanilla_gp_sum%>%
+  mutate(day = day(new_date),
+         month = month(new_date), 
+         year = year(new_date))
+```
+
+```{r, echo=FALSE}
+model_lm <- lm(new_flowers ~ day + month , data = vanilla_lm)
+
+
+```
+
+```{r, echo=FALSE}
+plot(vanilla_lm$month, vanilla_lm$new_flowers,
+     xlab = "month", ylab = 'numbers of new flowers')
+abline(model_lm)
+```
+
+```{r, echo=FALSE}
+plot(vanilla_lm$day, vanilla_lm$new_flowers,
+     xlab = "day", ylab = 'numbers of new flowers')
+abline(model_lm)
+```
+
+```{r, echo=FALSE}
+summary(model_lm)
+```
+From the regression results, judging from the high p-value, we cannot reject the null hypothesis for the dependency of new flowers, on the date column. This is not unusual because the number of new flowers naturally tend to a normal distribution as with many other phenomenon in nature. 
+
+
+
+### Fitting of the model
+
+```{r, echo=FALSE}
+shapiro.test(residuals(model_lm))
+```
+
+    Residuals not normally distributed, p.value < 0.05
+
+### SSE
+
+```{r, echo=FALSE}
+sum(residuals(model_lm)^2)
+```
+
+## 3. Holt-Winter
+First we will visualize the distribution of the data. 
+
+```{r, echo=FALSE, results='hide'}
+
+inds <- seq(as.Date("2020-03-12"), as.Date("2020-05-25"), by = "day")
+
+## Create a time series object
+###Replaces vanilla with vanilla_gp_sum
+vanilla_ts <- ts(vanilla_gp_sum$new_flowers,
+           start = c(2020, as.numeric(format(inds[1], "%j"))),
+           end = c(2020, as.numeric(format(inds[75], "%j"))),
+           frequency = 365.25)
+
+plot.ts(vanilla_ts)
+```
+
+In the first plot, we will set gamma to be False because there is no seasonality. However, the model assumes there is a trend which is represented in the beta component. 
+```{r}
+model_ht <- HoltWinters(vanilla_ts, gamma = FALSE)
+
+```
+
+```{r, echo=FALSE, results='hide'}
+plot(model_ht,
+     xlab = "date", ylab = 'numbers of new flowers')
+```
+In the second plot, we will set both beta and gamma to false. This makes the model perform "exponential smoothing" because it assumes that the data has no trend or seasonality.
+
+```{r}
+model_ht1 <- HoltWinters(vanilla_ts,beta = FALSE, gamma = FALSE)
+```
+
+
+```{r, echo=FALSE, results='hide'}
+
+plot(model_ht1,
+     xlab = "date", ylab = 'numbers of new flowers')
+```
+
+
+
+### SSE
+The SSE for both the plots are displayed below. We can see that the first model, where we assumed that there is trend but no seasonality, performs better as evidenced by the relatively lower value for sum of squared error.
+```{r, echo=FALSE}
+model_ht$SSE
+model_ht1$SSE
+```
+
+## 4. Auto ARIMA
+
+Seasonal set to False
+
+```{r}
+model_auto_arima <- auto.arima(vanilla_ts, seasonal = FALSE)
+```
+
+### SSE
+
+```{r, echo=FALSE}
+sum(residuals(model_auto_arima)^2)
+```
+
+## 5. Result
+The best model is Holt-Winter which assumes the presence of trend (beta) and no seasonality (gamma).
+
+```{r, echo=FALSE, results='hide'}
+prediction_ht <- predict(model_ht, n.ahead = 24, prediction.interval = TRUE, level = 0.95)
+
+plot(model_ht, prediction_ht)
+```
+
+#### Confidence interval
+
+```{r, echo=FALSE}
+prediction_ht
+
+```
+
+# II. Seasonal data (milk production)
+We decided to use another dataset with seasonal data, to explore different approaches which we may have missed in the previous dataset.
+```{r, echo=FALSE, results='hide'}
+#milk_production <- fread(here::here("Input/milk_production.csv"))
+milk_production <- read.csv('milk_production.csv')
+```
+
+
+## 1. Characterisation of the data
+The data set we have used is for milk production per month from 1962 to 1975. As we can see in the visualization, the data is additive seasonal, and has a positive linear trend.
+
+```{r, echo=FALSE, results='hide'}
+milk_ts <- ts(milk_production$pounds_per_cow, start = c(1962, 1), frequency = 12)
+```
+
+```{r, echo=FALSE}
+milk_ts
+```
+
+```{r, echo=FALSE}
+plot.ts(milk_ts)
+```
+
+## 2. Decompose time serie
+For this type of data we can use the classic decomposition method which uses the moving average. We notice that the systemic elements of trend and season have been separated properly and the randomness does not appear to have any trend.
+
+```{r, echo=FALSE, results='hide'}
+plot(decompose(milk_ts))
+```
+
+## 3. Holt-Winter
+
+Since the series has a trend and is also seasonal, both beta and gamma will not be set to False. We can experiment in tuning these parameters manually as well.
+
+### a. Model 1
+First we will check the result of Holt Winters model with the default values of the model.
+```{r}
+model_hw <- HoltWinters(milk_ts)
+```
+
+```{r, echo=FALSE, results='hide'}
+plot(model_hw)
+```
+
+### SSE
+
+```{r, echo=FALSE}
+model_hw$SSE
+```
+
+### b. Model 2 : Multiplicative
+Although we are aware (visually) that the series has a seasonal component which is additive in nature, we want to test how the model performs if we set the seasonality as multiplicative.
+
+```{r}
+model_hw_2 <- HoltWinters(milk_ts, seasonal = "multiplicative")
+```
+
+```{r, echo=FALSE, results='hide'}
+plot(model_hw_2)
+```
+
+### SSE
+
+```{r, echo=FALSE}
+model_hw_2$SSE
+```
+
+### c. Model 3 : Exponential smoothing
+Next we can set beta and gamma to false so that the model does not include a trend component and hence defaults to exponential smoothing of the levels. Typically, the exponential smoothing model assumes that the series does not have trend or seasonality and these components have to be removed before running the model and added back again. 
+We can observe that the model responds late to the changes in the trend because it relies only on the past values.
+```{r}
+model_hw_3 <-  HoltWinters(milk_ts, beta=FALSE, gamma = FALSE)
+```
+
+```{r, echo=FALSE, results='hide'}
+plot(model_hw_3)
+```
+
+### SSE
+
+```{r, echo=FALSE}
+model_hw_3$SSE
+```
+
+### b. Model 4 : Manual tuning
+We also tried to manually tune the parameters for beta and gamma to get the lowest values. We achieved a very close SSE value to the default parameters of the Holt Winters model by setting beta to 0 and gamma to 0.8. This can be translated to the idea that the model is set to learn the trend by accounting for more past values, and the seasonality by accounting for the most recent past values.
+```{r}
+model_hwt <- HoltWinters(milk_ts, beta = 0, gamma =0.8)
+
+```
+
+```{r, echo=FALSE, results='hide'}
+plot(model_hwt)
+```
+### SSE
+```{r, echo=FALSE}
+model_hwt$SSE
+```
+
+
+## 4. Auto ARIMA
+Finally we use Auto ARIMA to check if the SSE is better than our manual selections of models. Seasonal parameter is set to True. We can observe that this method provides the best result for this dataset.
+
+```{r}
+model_auto_arima <- auto.arima(milk_ts, seasonal = TRUE)
+```
+
+```{r, echo=FALSE}
+sum(residuals(model_auto_arima)^2)
+```
+
+## 5. Prediction
+
+The best model is Auto ARIMA with a lower SSE
+
+```{r, echo=FALSE, results='hide'}
+prediction_arima <- forecast(model_auto_arima, h = 30)
+
+plot(prediction_arima)
+```
+
+```{r}
+prediction_arima
+```
+
+#Resolve path issues with R library
+```{r}
+.libPaths()
+```
+
+```{r}
+Sys.getenv("PATH")
+```
+
+
+
+
+
+
+
+
+
+
+
